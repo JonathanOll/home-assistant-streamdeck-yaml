@@ -2185,22 +2185,45 @@ def update_key_image(
         deck.set_key_image(key, image)
 
 
-def get_deck() -> StreamDeck:
-    """Get the first Stream Deck device found on the system."""
+def get_deck(serial_number: str | None = None) -> StreamDeck:
+    """Get a Stream Deck device found on the system.
+
+    If ``serial_number`` is given, only the deck with that serial number is
+    used. Otherwise, the first visual deck is used.
+    """
     streamdecks = DeviceManager().enumerate()
     found = False
     for deck in streamdecks:
         if not deck.is_visual():
             continue
         deck.open()
+        if serial_number is not None and deck.get_serial_number() != serial_number:
+            deck.close()
+            continue
         deck.reset()
         found = True
         break
     if not found:
-        msg = "No Stream Deck found"
+        msg = (
+            f"No Stream Deck found with serial number {serial_number!r}"
+            if serial_number is not None
+            else "No Stream Deck found"
+        )
         raise RuntimeError(msg)
     console.log(f"Found {deck.key_count()} keys, {deck=}")
     return deck
+
+
+def list_decks() -> None:
+    """Print the model and serial number of all connected visual Stream Decks."""
+    for deck in DeviceManager().enumerate():
+        if not deck.is_visual():
+            continue
+        deck.open()
+        try:
+            print(f"{deck.deck_type()}	{deck.get_serial_number()}")  # noqa: T201
+        finally:
+            deck.close()
 
 
 def turn_on(config: Config, deck: StreamDeck, complete_state: StateDict) -> None:
@@ -3118,6 +3141,16 @@ def main() -> None:
         type=Path,
     )
     parser.add_argument(
+        "--serial-number",
+        default=os.environ.get("STREAMDECK_SERIAL"),
+        help="Serial number of the Stream Deck to use (default: first found, or env var STREAMDECK_SERIAL)",
+    )
+    parser.add_argument(
+        "--list-decks",
+        action="store_true",
+        help="List the connected Stream Decks (model and serial number) and exit.",
+    )
+    parser.add_argument(
         "--yaml-encoding",
         default=yaml_encoding,
         help=f"Specify encoding for YAML files (default is system encoding or from environment variable YAML_ENCODING (default: {yaml_encoding})",
@@ -3145,6 +3178,9 @@ def main() -> None:
         help="Allow less secure SSL (security level 1) for compatibility with slower hardware (e.g., RPi Zero).",
     )
     args = parser.parse_args()
+    if args.list_decks:
+        list_decks()
+        return
     if os.getenv("ALLOW_WEAKER_SSL", "").lower().startswith(("y", "t", "1")):
         args.allow_weaker_ssl = True
     console.log(f"Using version {__version__} of the Home Assistant Stream Deck.")
@@ -3153,7 +3189,7 @@ def main() -> None:
     )
     config = Config.load(args.config, yaml_encoding=args.yaml_encoding)
 
-    deck = get_deck()
+    deck = get_deck(args.serial_number)
     handler = _get_signal_handler(deck)
     signal.signal(signal.SIGINT, handler)
     signal.signal(signal.SIGTERM, handler)
